@@ -6,10 +6,16 @@ import os
 import asyncio
 import argparse
 import pyperclip
+from rich.console import Console
+from rich.json import JSON
+from rich.panel import Panel
+from rich.text import Text
+from rich import box
 
 from textual.binding import Binding
 
 from twg.core.model import TwigModel
+from twg.core.config import Config
 from twg.adapters.json_adapter import JsonAdapter
 from twg.ui.widgets.navigator import ColumnNavigator
 from twg.ui.widgets.inspector import Inspector
@@ -21,6 +27,7 @@ from twg.ui.widgets.loading import LoadingScreen
 
 from twg.ui.widgets.breadcrumbs import Breadcrumbs
 from twg.core.model import Node
+from twg.core.cleaner import repair_json
 
 MAX_FILE_SIZE_WARNING = 100 * 1024 * 1024 # 100 MB
 
@@ -46,7 +53,8 @@ class TwigApp(App):
     ]
 
     def on_mount(self) -> None:
-        self.theme = "catppuccin-mocha"
+        self.config = Config()
+        self.theme = self.config.get("theme", "catppuccin-mocha")
         self.title = "Twig"
         self.run_worker(self.load_file, thread=True)
 
@@ -110,6 +118,7 @@ class TwigApp(App):
         next_theme = themes[next_index]
         
         self.theme = next_theme
+        self.config.set("theme", next_theme)
         self.notify(f"Theme: {next_theme}")
 
     def __init__(self, file_path: str):
@@ -117,6 +126,7 @@ class TwigApp(App):
         self.model: TwigModel | None = None
         self.current_node: Node | None = None
         self.last_search_query: str | None = None
+        self.config: Config | None = None
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -176,8 +186,8 @@ class TwigApp(App):
                         self.notify(f"Path not found: {path}", severity="error")
                 except ValueError as e:
                     self.notify(str(e), severity="error")
-        
-        self.push_screen(JumpModal(), check_jump)
+
+        await self.push_screen(JumpModal(), check_jump)
 
     async def action_next_match(self) -> None:
         """Find next match for the last query."""
@@ -187,14 +197,14 @@ class TwigApp(App):
             
         navigator = self.query_one(ColumnNavigator)
         loading = LoadingScreen()
-        self.mount(loading)
+        await self.mount(loading)
         
         try:
              found = await navigator.find_next(self.last_search_query, direction=1)
              if not found:
                  self.notify(f"not found '{self.last_search_query}'")
         finally:
-             loading.remove()
+            await loading.remove()
 
     async def action_prev_match(self) -> None:
         """Find previous match for the last search query."""
@@ -204,14 +214,14 @@ class TwigApp(App):
 
         navigator = self.query_one(ColumnNavigator)
         loading = LoadingScreen()
-        self.mount(loading)
+        await self.mount(loading)
         
         try:
              found = await navigator.find_next(self.last_search_query, direction=-1)
              if not found:
                  self.notify(f"not found '{self.last_search_query}'")
         finally:
-             loading.remove()
+            await loading.remove()
 
     def action_copy_path(self) -> None:
         """Copies the jq-style path of the currently selected node to the clipboard."""
@@ -237,27 +247,141 @@ def run():
         help="The JSON/data file to explore."
     )
     parser.add_argument(
+        "output",
+        nargs="?",
+        help="Optional output file. For --fix, it saves the repaired JSON. For --print, it saves the formatted JSON. If omitted, prints to stdout."
+    )
+    
+    try:
+        from importlib.metadata import version, PackageNotFoundError
+        twg_version = version("twg")
+    except ImportError:
+        twg_version = "unknown"
+    except PackageNotFoundError:
+        twg_version = "dev"
+
+    parser.add_argument(
         "-v", "--version",
         action="version",
-        version="%(prog)s 1.0.0"
+        version=f"%(prog)s {twg_version}"
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="Attempt to automatically repair malformed JSON and exit."
+    )
+    parser.add_argument(
+        "-p", "--print",
+        action="store_true",
+        help="Print formatted and syntax-highlighted JSON to stdout and exit."
+    )
+    
+    parser.add_argument(
+        "--indent",
+        type=int,
+        default=2,
+        help="Number of spaces for indentation (default: 2)."
     )
     
     args = parser.parse_args()
-    
+
+    if not args.fix and not args.print:
+        # TUI Mode
+        if not os.path.exists(args.file):
+            print(f"Error: File not found: {args.file}", file=sys.stderr)
+            sys.exit(1)
+
+        if not args.file.lower().endswith(".json"):
+            print(f"Error: Invalid file type '{args.file}'. Twig currently only supports .json files.", file=sys.stderr)
+            sys.exit(1)
+            
+        app = TwigApp(args.file)
+        result = app.run()
+        
+        if result is not None and isinstance(result, str):
+            print(f"Error: {result}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # CLI Mode (--fix or --print)
     if not os.path.exists(args.file):
         print(f"Error: File not found: {args.file}", file=sys.stderr)
         sys.exit(1)
 
-    if not args.file.lower().endswith(".json"):
-        print(f"Error: Invalid file type '{args.file}'. Twig currently only supports .json files.", file=sys.stderr)
-        sys.exit(1)
+    try:
+        with open(args.file, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        if args.fix:
+            try:
+                content = repair_json(content)
+            except Exception as e:
+                print(f"Error repairing JSON: {e}", file=sys.stderr)
+                sys.exit(1)
         
-    app = TwigApp(args.file)
-    result = app.run()
-    
-    if result is not None and isinstance(result, str):
-        print(f"Error: {result}", file=sys.stderr)
+        try:
+            import json
+            parsed = json.loads(content)
+        except json.JSONDecodeError as e:
+            if args.print:
+                 print(f"Error: Failed to parse JSON. Use --fix to attempt repair.\n{e}", file=sys.stderr)
+                 sys.exit(1)
+            else:
+                 print(f"Error: Resulting JSON is invalid even after attempted fix.\n{e}", file=sys.stderr)
+                 sys.exit(1)
+
+        if args.output:
+            # Write to file (formatted)
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump(parsed, f, indent=args.indent)
+            
+            action = "Fixed" if args.fix else "Formatted"
+            print(f"{action} JSON written to {args.output}", file=sys.stderr)
+        
+        else:
+            if args.print:
+                file_size = len(content.encode('utf-8'))
+                
+                if isinstance(parsed, list):
+                    item_count = len(parsed)
+                    type_label = "Array"
+                elif isinstance(parsed, dict):
+                    item_count = len(parsed)
+                    type_label = "Object"
+                else:
+                    item_count = 1
+                    type_label = "Primitive"
+                
+                err_console = Console(stderr=True)
+                meta_text = Text()
+                meta_text.append(f" File: ", style="bold cyan")
+                meta_text.append(f"{os.path.basename(args.file)} \n")
+                meta_text.append(f" Size: ", style="bold cyan")
+                meta_text.append(f"{file_size / 1024:.1f} KB \n")
+                meta_text.append(f" Type: ", style="bold cyan")
+                meta_text.append(f"{type_label} ({item_count} items)")
+                
+                err_console.print(Panel(
+                    meta_text,
+                    title="Twig Metadata",
+                    border_style="blue",
+                    box=box.ROUNDED,
+                    expand=False
+                ))
+
+                # JSON to stdout
+                console = Console()
+                console.print(JSON(content, indent=args.indent))
+            
+            else:
+                print(json.dumps(parsed, indent=args.indent))
+
+        sys.exit(0)
+
+    except Exception as e:
+        print(f"Error processing file: {e}", file=sys.stderr)
         sys.exit(1)
+    
 
 if __name__ == "__main__":
     run()

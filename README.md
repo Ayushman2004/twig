@@ -17,10 +17,10 @@
 ![Twig Demo](asset/demo.gif)
 
 **The Demo Shows:**
-1.  **Navigation**: Traversing regions (`us-east-1`) → VPCs → Subnets → Instances.
-2.  **Global Search**: Finding "api-gateway" instantly.
-3.  **Smart Jump**: Entering a path (`.regions...instances[0].name`) to jump directly to a deeply nested key.
-4.  **Match Cycling**: Searching for "available" and using `n`/`N` to cycle through results.
+1.  **CLI Power**: Checking version (`--version`) and repairing invalid JSON (`--fix --print`).
+2.  **Navigation**: Traversing regions (`us-east-1`) → VPCs → Subnets → Instances.
+3.  **Global Search**: Finding "api-gateway" instantly.
+4.  **Smart Jump**: Entering a path (`.regions...instances[0].name`) to jump directly to a deeply nested key.
 5.  **Themes & Copy**: Toggling themes and copying paths.
 
 ## Why Twig?
@@ -37,9 +37,9 @@ Twig solves this. It brings the fluid, hierarchical navigation of **macOS Finder
 
 ## Features
 
-### Deep Search
-*   **Instant Access**: Type `/` to search keys and values across the entire file.
-*   **Unlimited Depth**: Finds matches (like "created_at") even if nested 50 levels deep.
+*   **Indentation Control**: Custom output formatting with `--indent`.
+*   **Enriched Help**: Press `?` to see the new dashboard with logo, version, and dynamic shortcuts.
+*   **Deep Search**: Type `/` to search and traverse infinitely nested trees.
 
 ### Smart Path Jump
 Know exactly where you want to go?
@@ -50,6 +50,38 @@ Know exactly where you want to go?
 *   **Clipboard Ready**: Press `c` to copy the current `jq`-compatible path (e.g., `.orders[5].id`).
 *   **Themeable**: Cycle through themes (Catppuccin, Dracula, Monokai) with `t`.
 *   **Zero Learning Curve**: Use Arrow keys or Vim keys. Press `?` for help.
+
+### Repair Malformed JSON
+Twig can automatically repair common JSON errors using `json-repair`, including trailing commas, single quotes, unquoted keys, and missing braces.
+
+**Usage:**
+```bash
+# Print fixed JSON to stdout
+twig --fix bad.json
+
+# Save fixed JSON to a new file
+twig --fix bad.json clean.json
+
+# Overwrite the original file
+twig --fix bad.json bad.json
+```
+
+### Pretty Print
+Output formatted JSON to `stdout` with syntax highlighting and metadata (to `stderr`).
+
+```bash
+# Print formatted JSON
+twig -p data.json
+
+# Fix and print invalid JSON
+twig -p --fix bad.json
+
+# Save formatted JSON to a file
+twig -p unformatted.json formatted.json
+
+# Custom Indentation (default is 2)
+twig -p --indent 4 data.json
+```
 
 ## Installation
 
